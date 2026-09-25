@@ -1,42 +1,29 @@
-# Xmip repository template — Rust
+# xmip-core-persist-sqlite
 
-This repository is the starter snapshot for a Rust Xmip module repository. It is
-not an Xmip runtime capability.
+The management store's engine: an embedded SQLite file (ADR-0015, amendment
+2026-09-25). A technology of
+[xmip-core-persist](https://github.com/IlleNilsson/xmip-core-persist).
 
-For a .NET 11 surface — the CLI, the PowerShell module, the MAUI desktop GUI or
-the Blazor web GUI — use
-[xmip-template-dotnet](https://github.com/IlleNilsson/xmip-template-dotnet)
-instead. ADR-0014: every user-interfacing module is .NET 11, and
-`xmip-core-abi` is the exception.
+`Sqlite::open(file)` is a `persist::Engine`, and
+`persist::EncryptedStore::open(Sqlite::open(file)?, &keys, &kek)` is the
+management store. One table, `record`, a keyed hash as its key and a sealed
+record as its value; the file holds the table's name and nothing else in the
+clear. It encrypts nothing itself, and SQLCipher is not used (ADR-0063
+clause 2).
 
-A repository generated from this template has independent history. Later
-template changes do not automatically rewrite generated repositories.
-
-## Before implementation
-
-Follow [TEMPLATE_SETUP.md](TEMPLATE_SETUP.md), and item 3 first. The new
-repository must be classified and declared in the authoritative Xmip
-architecture manifest before its responsibility or dependencies are treated as
-accepted architecture.
-
-## Toolchain
-
-`rust-toolchain.toml` pins the toolchain for the whole estate. rustup reads it
-automatically and installs what is missing. Do not change it here — raising it
-is one deliberate change across every repository.
-
-## Shared governance
-
-Repository-specific licensing remains explicit in [LICENSE](LICENSE).
-Contribution, security, support, issue and pull-request defaults are inherited
-from [IlleNilsson/.github](https://github.com/IlleNilsson/.github) when they are
-not overridden locally.
+`rusqlite` 0.37 with `bundled`, as `xmip-core-transport-sqlite` and
+`xmip-core-archive-sqlite` use it: the SQLite amalgamation is compiled in, so
+a node needs no SQLite beside it. SQLite's defaults are kept — a rollback
+journal and full synchronous writes. Those two transports write where a
+customer points them, and whether that database is encrypted is the
+customer's (ADR-0063 clause 3); this one is Xmip's own.
 
 ## Verification
 
-The included workflow is manual-only and calls the versioned shared workflow at
-`IlleNilsson/.github@v1`. It does not run on pushes, pull requests or a
-schedule.
-
-The ordered stages are formatting, semantic analysis, linting, compilation and
-linking, and test execution. Packaging and publishing are not configured.
+`persist::fixture::conformance` over a real database file, on Windows and on
+the AlmaLinux guest: a record back after the file is closed and reopened,
+neither the record's key, its kind nor its value anywhere in the directory's
+files, a tampered record refused with its scope, the store refused under
+another key of the same name; and a file that is not a database is refused.
+The workflow is manual-only and calls the versioned shared workflow at
+`IlleNilsson/.github@v1`.
