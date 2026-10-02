@@ -12,7 +12,7 @@
 //! `SQLite`'s defaults are kept: a rollback journal and full synchronous
 //! writes, so a record a caller was told is written is on disk.
 
-use persist::{Engine, PersistError};
+use persist::{Change, Engine, PersistError};
 use rusqlite::{Connection, OptionalExtension, params};
 use std::path::Path;
 use std::sync::{Mutex, MutexGuard};
@@ -35,7 +35,23 @@ impl Sqlite {
     /// [`PersistError::Engine`] when `SQLite` cannot open the file or make
     /// the table.
     pub fn open(file: &Path) -> Result<Self, PersistError> {
-        let connection = Connection::open(file).map_err(failed)?;
+        Self::over(Connection::open(file).map_err(failed)?)
+    }
+
+    /// A database in memory, gone with it: the administration database of
+    /// a Storage node under test (the owner, 2026-10-01: *for testing
+    /// purposes the Xmip Nodes of Storage type can use SQLite in memory for
+    /// administration and `RocksDB` for runtime*; `deployment-model.md`
+    /// section 7).
+    ///
+    /// # Errors
+    ///
+    /// [`PersistError::Engine`] when `SQLite` cannot make the table.
+    pub fn in_memory() -> Result<Self, PersistError> {
+        Self::over(Connection::open_in_memory().map_err(failed)?)
+    }
+
+    fn over(connection: Connection) -> Result<Self, PersistError> {
         connection
             .execute_batch(
                 "CREATE TABLE IF NOT EXISTS record (\
@@ -103,6 +119,23 @@ impl Engine for Sqlite {
             .map(drop)
             .map_err(failed)
     }
+
+    fn apply(&self, batch: &[Change]) -> Result<(), PersistError> {
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction().map_err(failed)?;
+        for (key, value) in batch {
+            match value {
+                Some(value) => transaction.execute(
+                    "INSERT INTO record (lookup, sealed) VALUES (?1, ?2) \
+                     ON CONFLICT (lookup) DO UPDATE SET sealed = excluded.sealed",
+                    params![key, value],
+                ),
+                None => transaction.execute("DELETE FROM record WHERE lookup = ?1", params![key]),
+            }
+            .map_err(failed)?;
+        }
+        transaction.commit().map_err(failed)
+    }
 }
 
 #[cfg(test)]
@@ -128,6 +161,23 @@ mod tests {
             || everything_in(&dir),
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_database_in_memory_keeps_a_batch_whole_while_it_lives() {
+        let memory = Sqlite::in_memory().expect("in memory");
+        memory
+            .apply(&[
+                (b"a".to_vec(), Some(b"1".to_vec())),
+                (b"b".to_vec(), Some(b"2".to_vec())),
+            ])
+            .expect("applied");
+        memory
+            .apply(&[(b"a".to_vec(), None), (b"c".to_vec(), Some(b"3".to_vec()))])
+            .expect("applied");
+        assert_eq!(memory.read(b"a").expect("read"), None);
+        assert_eq!(memory.read(b"b").expect("read"), Some(b"2".to_vec()));
+        assert_eq!(memory.read(b"c").expect("read"), Some(b"3".to_vec()));
     }
 
     #[test]
