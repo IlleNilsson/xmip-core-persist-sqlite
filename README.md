@@ -23,9 +23,9 @@ customer's (ADR-0063 clause 3); this one is Xmip's own.
 
 `persist::fixture::conformance` over a real database file, on Windows and on
 the AlmaLinux guest: a record back after the file is closed and reopened,
-index entries found by a value within a time, oldest or newest first,
-neither the record's key, its kind, its value, an indexed value nor the
-record an entry finds anywhere in the directory's files, a tampered record
+index entries found by a value within a time, oldest or newest first, their
+values in the clear in the files, and neither the record's key, its kind nor
+its value anywhere in the directory's files, a tampered record
 refused with its scope, the store refused under another key of the same name;
 and a file that is not a database is refused. The workflow is manual-only and
 calls the versioned shared workflow at `IlleNilsson/.github@v1`.
