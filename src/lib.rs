@@ -3,8 +3,9 @@
 //! The management store's engine: an embedded `SQLite` file (ADR-0015,
 //! amendment 2026-09-25).
 //!
-//! [`Sqlite`] is a [`persist::Engine`]: one table, `record`, a keyed hash
-//! as its key and a sealed record as its value, handed down by
+//! [`Sqlite`] is a [`persist::Engine`]: one table, `record`, a keyed hash —
+//! or an index entry's sortable key — as its key and a sealed record as its
+//! value, a range of keys read in their byte order, handed down by
 //! [`persist::EncryptedStore`]. The file holds the table's name and nothing
 //! else in the clear. It encrypts nothing itself, and `SQLCipher` is not used:
 //! the layer above is the one way (ADR-0063 clause 2).
@@ -12,7 +13,7 @@
 //! `SQLite`'s defaults are kept: a rollback journal and full synchronous
 //! writes, so a record a caller was told is written is on disk.
 
-use persist::{Change, Engine, PersistError};
+use persist::{Change, Engine, Entry, PersistError};
 use rusqlite::{Connection, OptionalExtension, params};
 use std::path::Path;
 use std::sync::{Mutex, MutexGuard};
@@ -135,6 +136,33 @@ impl Engine for Sqlite {
             .map_err(failed)?;
         }
         transaction.commit().map_err(failed)
+    }
+
+    /// One query over the primary key: a `BLOB` compares byte by byte, so
+    /// `BETWEEN` and `ORDER BY` are the range and its order.
+    fn scan(
+        &self,
+        first: &[u8],
+        last: &[u8],
+        most: usize,
+        reverse: bool,
+    ) -> Result<Vec<Entry>, PersistError> {
+        let query = if reverse {
+            "SELECT lookup, sealed FROM record WHERE lookup BETWEEN ?1 AND ?2 \
+             ORDER BY lookup DESC LIMIT ?3"
+        } else {
+            "SELECT lookup, sealed FROM record WHERE lookup BETWEEN ?1 AND ?2 \
+             ORDER BY lookup ASC LIMIT ?3"
+        };
+        let most = i64::try_from(most).unwrap_or(i64::MAX);
+        let connection = self.connection()?;
+        let mut statement = connection.prepare_cached(query).map_err(failed)?;
+        let rows = statement
+            .query_map(params![first, last, most], |row| {
+                Ok((row.get(0)?, row.get(1)?))
+            })
+            .map_err(failed)?;
+        rows.collect::<Result<_, _>>().map_err(failed)
     }
 }
 
