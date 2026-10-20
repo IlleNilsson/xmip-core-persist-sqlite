@@ -201,6 +201,15 @@ impl Engine for Sqlite {
         self.applied(batch, false)
     }
 
+    /// The write-ahead log checkpointed in full, which syncs it: every
+    /// write before now durable, the deferred among them.
+    fn sync(&self) -> Result<(), PersistError> {
+        self.session()?
+            .connection
+            .query_row("PRAGMA wal_checkpoint(FULL)", [], |_| Ok(()))
+            .map_err(failed)
+    }
+
     /// One query over the primary key: a `BLOB` compares byte by byte, so
     /// `BETWEEN` and `ORDER BY` are the range and its order.
     fn scan(
