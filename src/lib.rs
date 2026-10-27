@@ -22,7 +22,7 @@
 //! disk ends the log there. A rollback journal could not give that: a
 //! commit left unsynced in it can tear the file under what was synced.
 
-use persist::{Change, Engine, Entry, PersistError};
+use persist::{Change, Engine, Entry, PersistError, Reads};
 use rusqlite::{Connection, OptionalExtension, params};
 use std::path::Path;
 use std::sync::{Mutex, MutexGuard};
@@ -149,15 +149,7 @@ impl Engine for Sqlite {
     }
 
     fn read(&self, key: &[u8]) -> Result<Option<Vec<u8>>, PersistError> {
-        self.session()?
-            .connection
-            .query_row(
-                "SELECT sealed FROM record WHERE lookup = ?1",
-                params![key],
-                |row| row.get(0),
-            )
-            .optional()
-            .map_err(failed)
+        read(&self.session()?.connection, key)
     }
 
     fn write(&self, key: &[u8], value: &[u8]) -> Result<(), PersistError> {
@@ -219,23 +211,79 @@ impl Engine for Sqlite {
         most: usize,
         reverse: bool,
     ) -> Result<Vec<Entry>, PersistError> {
-        let query = if reverse {
-            "SELECT lookup, sealed FROM record WHERE lookup BETWEEN ?1 AND ?2 \
-             ORDER BY lookup DESC LIMIT ?3"
-        } else {
-            "SELECT lookup, sealed FROM record WHERE lookup BETWEEN ?1 AND ?2 \
-             ORDER BY lookup ASC LIMIT ?3"
-        };
-        let most = i64::try_from(most).unwrap_or(i64::MAX);
-        let session = self.session()?;
-        let mut statement = session.connection.prepare_cached(query).map_err(failed)?;
-        let rows = statement
-            .query_map(params![first, last, most], |row| {
-                Ok((row.get(0)?, row.get(1)?))
-            })
-            .map_err(failed)?;
-        rows.collect::<Result<_, _>>().map_err(failed)
+        scanned(
+            &self.session()?.connection,
+            (first, last),
+            most,
+            ordered(reverse),
+        )
     }
+
+    /// Its one connection held for the view: every read through it sees
+    /// one state, and a write on this engine waits for it to end.
+    fn view(&self) -> Result<Box<dyn Reads + '_>, PersistError> {
+        Ok(Box::new(Held(self.session()?)))
+    }
+}
+
+/// The connection held for a view.
+struct Held<'a>(MutexGuard<'a, Session>);
+
+impl Reads for Held<'_> {
+    fn read(&self, key: &[u8]) -> Result<Option<Vec<u8>>, PersistError> {
+        read(&self.0.connection, key)
+    }
+
+    fn scan(
+        &self,
+        first: &[u8],
+        last: &[u8],
+        most: usize,
+        reverse: bool,
+    ) -> Result<Vec<Entry>, PersistError> {
+        scanned(&self.0.connection, (first, last), most, ordered(reverse))
+    }
+}
+
+/// The value under `key` on `connection`.
+fn read(connection: &Connection, key: &[u8]) -> Result<Option<Vec<u8>>, PersistError> {
+    connection
+        .query_row(
+            "SELECT sealed FROM record WHERE lookup = ?1",
+            params![key],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(failed)
+}
+
+/// The query of a range, in order or the reverse.
+const fn ordered(reverse: bool) -> &'static str {
+    if reverse {
+        "SELECT lookup, sealed FROM record WHERE lookup BETWEEN ?1 AND ?2 \
+         ORDER BY lookup DESC LIMIT ?3"
+    } else {
+        "SELECT lookup, sealed FROM record WHERE lookup BETWEEN ?1 AND ?2 \
+         ORDER BY lookup ASC LIMIT ?3"
+    }
+}
+
+/// The records from `first` to `last` on `connection`, up to `most`, by
+/// `query`.
+fn scanned(
+    connection: &Connection,
+    (first, last): (&[u8], &[u8]),
+    most: usize,
+    query: &str,
+) -> Result<Vec<Entry>, PersistError> {
+    let most = i64::try_from(most).unwrap_or(i64::MAX);
+    let mut statement = connection.prepare_cached(query).map_err(failed)?;
+    let rows = statement
+        .query_map(params![first, last, most], |row| {
+            Ok((row.get(0)?, row.get(1)?))
+        })
+        .map_err(failed)?;
+    rows.collect::<Result<_, _>>().map_err(failed)
 }
 
 #[cfg(test)]
