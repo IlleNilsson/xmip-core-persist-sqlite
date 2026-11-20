@@ -289,15 +289,11 @@ fn scanned(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use file::temporary::Folder;
     use persist::fixture::{conformance, everything_in};
-    use std::path::PathBuf;
 
-    fn directory(test: &str) -> PathBuf {
-        let path =
-            std::env::temp_dir().join(format!("xmip-persist-sqlite-{test}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&path);
-        std::fs::create_dir_all(&path).expect("directory");
-        path
+    fn directory(test: &str) -> Folder {
+        Folder::new(&format!("persist-sqlite-{test}"))
     }
 
     #[test]
@@ -308,7 +304,6 @@ mod tests {
             || Sqlite::open(&file).expect("open"),
             || everything_in(&dir),
         );
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// What the connection's commits are now: 1, `NORMAL`, or 2, `FULL`.
@@ -343,7 +338,6 @@ mod tests {
         assert_eq!(again.read(b"chunk").expect("read"), Some(b"bytes".to_vec()));
         assert_eq!(again.read(b"record").expect("read"), Some(b"kept".to_vec()));
         drop(again);
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -358,7 +352,6 @@ mod tests {
         assert_eq!(mode, "wal");
         drop(session);
         drop(database);
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -391,6 +384,5 @@ mod tests {
             Sqlite::open(&file),
             Err(PersistError::Engine { .. })
         ));
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }
