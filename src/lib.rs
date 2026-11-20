@@ -22,7 +22,7 @@
 //! disk ends the log there. A rollback journal could not give that: a
 //! commit left unsynced in it can tear the file under what was synced.
 
-use persist::{Change, Engine, Entry, PersistError, Reads};
+use persist::{BorrowedChange, Engine, Entry, PersistError, Reads};
 use rusqlite::{Connection, OptionalExtension, params};
 use std::path::Path;
 use std::sync::{Mutex, MutexGuard};
@@ -121,7 +121,7 @@ impl Sqlite {
     }
 
     /// `batch` as one transaction, synced on its commit where `synced`.
-    fn applied(&self, batch: &[Change], synced: bool) -> Result<(), PersistError> {
+    fn applied(&self, batch: &[BorrowedChange<'_>], synced: bool) -> Result<(), PersistError> {
         let mut session = self.session()?;
         let transaction = session.syncing(synced)?.transaction().map_err(failed)?;
         for (key, value) in batch {
@@ -183,13 +183,13 @@ impl Engine for Sqlite {
             .map_err(failed)
     }
 
-    fn apply(&self, batch: &[Change]) -> Result<(), PersistError> {
+    fn apply(&self, batch: &[BorrowedChange<'_>]) -> Result<(), PersistError> {
         self.applied(batch, true)
     }
 
     /// Into the write-ahead log, unsynced: the next synced write syncs the
     /// log, and with it this.
-    fn apply_deferred(&self, batch: &[Change]) -> Result<(), PersistError> {
+    fn apply_deferred(&self, batch: &[BorrowedChange<'_>]) -> Result<(), PersistError> {
         self.applied(batch, false)
     }
 
@@ -322,13 +322,13 @@ mod tests {
         let database = Sqlite::open(&file).expect("open");
         assert_eq!(synchronous(&database), 2, "a write is synced");
         database
-            .apply_deferred(&[(b"chunk".to_vec(), Some(b"bytes".to_vec()))])
+            .apply_deferred(&[(b"chunk", Some(b"bytes"))])
             .expect("written");
         assert_eq!(synchronous(&database), 1, "committed unsynced");
         let read = database.read(b"chunk").expect("read");
         assert_eq!(read, Some(b"bytes".to_vec()));
         database
-            .apply(&[(b"record".to_vec(), Some(b"kept".to_vec()))])
+            .apply(&[(b"record", Some(b"kept"))])
             .expect("synced");
         assert_eq!(synchronous(&database), 2, "synced again");
         database.write(b"another", b"written").expect("synced");
@@ -358,13 +358,10 @@ mod tests {
     fn a_database_in_memory_keeps_a_batch_whole_while_it_lives() {
         let memory = Sqlite::in_memory().expect("in memory");
         memory
-            .apply(&[
-                (b"a".to_vec(), Some(b"1".to_vec())),
-                (b"b".to_vec(), Some(b"2".to_vec())),
-            ])
+            .apply(&[(b"a", Some(b"1")), (b"b", Some(b"2"))])
             .expect("applied");
         memory
-            .apply(&[(b"a".to_vec(), None), (b"c".to_vec(), Some(b"3".to_vec()))])
+            .apply(&[(b"a", None), (b"c", Some(b"3"))])
             .expect("applied");
         assert_eq!(memory.read(b"a").expect("read"), None);
         assert_eq!(memory.read(b"b").expect("read"), Some(b"2".to_vec()));
